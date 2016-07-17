@@ -1,0 +1,202 @@
+#R Programming Experience to build predictive models and identified potential helpfulness of Amazon reviews 
+#for prioritizing customer service
+
+#Hongyang(Rex) Lei
+#William E. Simon School of Business
+#University of Rochester
+
+
+#PART 1: MODEL FITTING------------------------
+#load and clean the data
+getwd()
+setwd("/Users/Rex/Desktop/Marketing Analytics/ADMA HW3")
+fullDB = read.csv("HW3 - Training Data.csv", fileEncoding="latin1")
+testDB = read.csv("HW3 - Testing Data For Students.csv", fileEncoding="latin1")
+#get the length of review text
+fullDB$reviewLength = nchar(paste(fullDB$review.text))
+testDB$reviewLength = nchar(paste(testDB$review.text))
+#Clear cases where number.of.votes = 0 
+fullDB = subset(fullDB,fullDB$number.of.votes >0)
+#calculate the % of helpfulness
+fullDB$percentHelpful = fullDB$number.of.helpfulness/fullDB$number.of.votes
+#transfer star rating into binary variable, if 5 then 1 else 0
+fullDB$is5 = ifelse(fullDB$star.rating == 5, 1, 0)
+testDB$is5 = ifelse(testDB$star.rating == 5, 1, 0)
+
+#seperate the fullDB into train and holdOutSample
+set.seed(345)
+train = sample(1:nrow(fullDB),nrow(fullDB)*0.8)
+trainingSet = fullDB[train,]
+holdOutSample = fullDB[-train,]
+
+#create funtion that calculate MSE(this includes the calculation of cross validation)
+mse = function(lm){
+  MSE = mean((holdOutSample$percentHelpful - predict(lm, holdOutSample))^2)
+  return(MSE)
+}
+
+#Fit in different models
+#CART trees
+install.packages('rpart')
+library('rpart')
+cartFit = rpart(percentHelpful~reviewLength+verified.purchase+is5,data=trainingSet,method='anova')
+print(cartFit)
+mse(cartFit) #0.007134586
+
+#MARS
+install.packages("earth")
+library(earth)
+marsFit = earth(percentHelpful~reviewLength+verified.purchase+is5,data=trainingSet)
+summary(marsFit)
+mse(marsFit) #0.006981555
+
+#Bagged Trees
+install.packages("ipred")
+library(ipred)
+baggedFit = bagging(percentHelpful~reviewLength+verified.purchase+is5,data=trainingSet)
+summary(baggedFit)
+mse(baggedFit) #0.007057552
+
+#Random Forests
+install.packages("randomForest")
+library("randomForest")
+forestFit = randomForest(percentHelpful~reviewLength+verified.purchase+is5,data=trainingSet) 
+print(forestFit) # view results 
+importance(forestFit) # importance of each predictor
+mse(forestFit) #0.007019155
+
+#Support Vector Machine
+install.packages("e1071")
+library("e1071")
+svmFit = svm(percentHelpful~reviewLength+verified.purchase+is5,data=trainingSet)
+summary(svmFit)
+mse(svmFit) #0.008826549
+
+#Boosting
+install.packages("gbm")
+library("gbm")
+boostFit = gbm(percentHelpful~reviewLength+verified.purchase+is5,data=trainingSet, distribution = "gaussian")
+plot(boostFit)
+summary(boostFit)
+mseBoosting = function(lm){
+  MSE = mean((holdOutSample$percentHelpful - predict(lm, holdOutSample, n.trees = boostFit$n.trees))^2)
+  return(MSE)
+}
+mseBoosting(boostFit) #0.007320363
+
+#Neural Network
+install.packages("nnet")
+library("nnet")
+nnetFit = nnet(percentHelpful~reviewLength+verified.purchase+is5,data=trainingSet, linout=1,size = 2)
+summary(nnetFit)
+mse(nnetFit) #0.007350515
+
+#K-Nearest Neighbor
+install.packages("FNN")
+library("FNN")
+knnFit = knn.reg(cbind(trainingSet$reviewLength, trainingSet$verified.purchase, trainingSet$is5), y=trainingSet$percentHelpful,k=5)
+summary(knnFit)
+knnFit$PRESS/7904 #0.007235394
+
+#generate vector of predictions in test data for grading
+cartVec = predict(cartFit,testDB)
+marsVec = predict(marsFit,testDB)
+baggedVec = predict(baggedFit,testDB)
+forestVec = predict(forestFit,testDB)
+svmVec = predict(svmFit,testDB)
+boostVec = predict(boostFit,testDB,n.trees = boostFit$n.trees)
+nnetVec = predict(nnetFit,testDB)
+knnFit2 = knn.reg(train=cbind(trainingSet$reviewLength, trainingSet$is5, trainingSet$verified.purchase), y = trainingSet$percentHelpful, test=cbind(testDB$reviewLength, testDB$is5,testDB$verified.purchase), k=5)
+knnVec = knnFit2$pred
+
+#Based on the mse, MARS is the best model with the lowest mse, so
+bestVec = marsVec
+
+
+#PART 2: MODEL COMPARSION------------------------
+modelComparsion = matrix(NA,nrow=4,ncol=8)
+
+#calculate how long each model took to fit
+cartTime = system.time(rpart(percentHelpful~reviewLength+verified.purchase+is5,data=trainingSet,method='anova'))
+marsTime = system.time(earth(percentHelpful~reviewLength+verified.purchase+is5,data=trainingSet))
+baggedTime = system.time(bagging(percentHelpful~reviewLength+verified.purchase+is5,data=trainingSet))
+forestTime = system.time(randomForest(percentHelpful~reviewLength+verified.purchase+is5,data=trainingSet))
+svmTime = system.time(svm(percentHelpful~reviewLength+verified.purchase+is5,data=trainingSet))
+boostTime = system.time(gbm(percentHelpful~reviewLength+verified.purchase+is5,data=trainingSet, distribution = "gaussian"))
+nnetTime = system.time(nnet(percentHelpful~reviewLength+verified.purchase+is5,data=trainingSet, linout=1,size = 2))
+knnTime = system.time(knn.reg(cbind(trainingSet$reviewLength, trainingSet$verified.purchase, trainingSet$is5), y=trainingSet$percentHelpful,k=5))
+
+modelComparsion[1,] = c(mse(cartFit), mse(marsFit), mse(baggedFit), mse(forestFit), mse(svmFit), mseBoosting(boostFit), mse(nnetFit), knnFit$PRESS/7904)
+modelComparsion[2,] = c(cartTime[3], marsTime[3], baggedTime[3], forestTime[3], svmTime[3],  boostTime[3], nnetTime[3], knnTime[3])
+colnames(modelComparsion) = c("cart","mars","bagged","forest","svm","boost","nnet","knn")
+rownames(modelComparsion) = c("mse","time","withinMse","difference")
+
+#create funtion that calculate within sample MSE for accuracy
+mseWithin = function(lm){
+  MSE = mean((trainingSet$percentHelpful - predict(lm, trainingSet))^2)
+  return(MSE)
+}
+mseWithin(cartFit) #0.007248729
+mseWithin(marsFit) #0.007145404
+mseWithin(baggedFit) #0.007211226
+mseWithin(forestFit) #0.00712245
+mseWithin(svmFit) #0.00897323
+mseWithinBoosting = function(lm){
+  MSE = mean((trainingSet$percentHelpful - predict(lm, trainingSet, n.trees = boostFit$n.trees))^2)
+  return(MSE)
+}
+mseWithinBoosting(boostFit) #0.007495933
+mseWithin(nnetFit) #0.007528896
+mean((trainingSet$percentHelpful - knnFit$pred)^2) #0.007235394
+
+#calculate the MSE difference to check the overfit of data
+modelComparsion[3,] = c(0.007248729,0.007145404,0.007211226,0.00712245,0.00897323,0.007495933,0.007528896,0.007235394)
+modelComparsion = as.data.frame(modelComparsion)
+modelComparsion[4,] = modelComparsion[3,] - modelComparsion[1,]
+#based on the difference we can see the overfit level of each model, refer to the report 
+
+#use the best model marsFit to see the words that are more likely to be rated as helpful
+marsFit$coefficients
+#percentHelpful
+#(Intercept)           9.196658e-01
+#h(reviewLength-383)  -6.744491e-06
+#h(383-reviewLength)   9.643530e-05
+#is5                   2.560282e-02
+#verified.purchase     1.285788e-02
+
+#from the coefficient we can see that reviews are more likely to be rated as helpful
+# if reviewLength is more than 383, rating is 5 and has verified purchase, so now we subset by using
+# these criteria.
+
+sampleDB = subset(fullDB,fullDB$reviewLength >383)
+sampleDB = subset(sampleDB,sampleDB$is5 == 1)
+sampleDB = subset(sampleDB,sampleDB$verified.purchase == 1)
+
+#now we clean the review text and calculate the frequency of words
+library(tm)
+install.packages("topicmodels")
+library(topicmodels)
+library(SnowballC)
+reviewText = sampleDB$review.text
+docs = Corpus(DataframeSource(as.matrix(reviewText)))
+#clean the words
+docs = tm_map(docs, content_transformer(tolower)) 
+docs = tm_map(docs, content_transformer(removePunctuation))
+docs = tm_map(docs, content_transformer(removeNumbers))
+docs = tm_map(docs, removeWords, stopwords("english"))
+docs = tm_map(docs, stemDocument)
+docs = tm_map(docs, content_transformer(stripWhitespace))
+
+#create the document term matrix
+docs.dtm = DocumentTermMatrix(docs)
+#get full details on terms
+term.freq =colSums(as.matrix(docs.dtm))
+#make a dataframe of it
+term.df = data.frame(word=names(term.freq), freq = term.freq)
+#Based on the frequency of words on term.df, we can write the sample review
+
+#clean the RData
+rm(fullDB,holdOutSample,testDB,sampleDB,testDB,term.df,trainingSet)
+rm(baggedTime,baggedFit,boostTime,boostFit,cartFit,cartTime,docs,docs.dtm,forestFit,forestTime,
+   knnTime,knnFit,knnFit2,marsTime,marsFit,nnetTime,nnetFit,reviewText,svmTime,svmFit,term.freq,train)
+save.image("hongyang.lei_hw3.Rdata")
